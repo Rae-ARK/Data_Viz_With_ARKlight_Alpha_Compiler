@@ -53,6 +53,53 @@ respectively, so the compatibility guard below still does its job
 unmodified. The one thing that *did* change in the interim is the
 license-acceptance gate, covered in its own section below.
 
+**Re-verified again, this time against a real feature regression in
+this table itself:** `alpha` is now at `v0.062`, `main` at `v0.54.0`
+(both re-cloned and re-checked directly, not assumed). `Site.style`,
+`Page(...)` head metadata, and `arklight search`/`--help` are now
+present on **both** branches -- `main` caught up, so none of those
+rows still distinguish the two. What still doesn't exist on `main` at
+all, confirmed by grepping `main`'s own `arklight/api.py` rather than
+inferring from an old table, is `component(...)`/`Prop`/
+`ComponentState` -- the `v0.060` "user-defined, reusable components"
+milestone, including component-owned `state=`. This project's
+`/playground` page (`pages/playground.py`) now uses exactly that
+(`component(state={...})` for independently-instanced cards and
+counters), so it's the real reason this project still requires
+`alpha` -- not the older `Site.style`/head-metadata rows, which are
+now table stakes on either branch. `services/compatibility.py`'s
+guard has been updated to check for `component`/`Prop`/
+`ComponentState` instead of `Site.style`, and was verified directly
+against both a real `alpha` v0.062 install (passes) and a real `main`
+v0.54.0 install (fails with a clear message, not a raw
+`AttributeError`).
+
+One more thing found this pass, not previously documented: `Predicate`/
+`Show`/`Computed`/`Derive` (used on `/bundle-size`'s interactive
+budget checker) are implemented in `arklight/api.py` on **both**
+branches, but **neither** branch's `arklight/__init__.py` re-exports
+them -- `from arklight import Predicate` raises `ImportError` on a
+real `alpha` v0.062 install, confirmed directly. This project imports
+them from `arklight.api` directly instead (see the top of
+`pages/bundle_size.py` and `pages/playground.py`), and doesn't rely on
+this guard to catch it, since `hasattr(arklight, ...)` can't
+distinguish "not implemented" from "implemented but not exported" --
+worth re-checking this import path once a future ARKlight release
+closes that `__init__.py` gap.
+
+Also found and fixed while building `/playground`'s refactor: a
+component's own `state=` only gets its `Bind(...)`/`on_click=Action.*`/
+`bind_class=`/`bind_value=` references rewritten onto its namespaced
+state key -- a `Show(Predicate.gt(...))` referencing that same
+component-owned state fails a real build with "references state
+'count', which isn't declared on this page". Not a docs gap (the
+docs' own "Component-owned state" section only ever lists those four
+reference kinds as supported), but easy to miss until it's tried.
+`pages/playground.py`'s `Counter()` docstring covers this in detail;
+`pages/bundle_size.py`'s budget checker uses `Predicate.gt/lt/equals`
+against page-level `State`/`Computed` instead, where it's fully
+supported.
+
 ## What's in this repo
 
 ```
