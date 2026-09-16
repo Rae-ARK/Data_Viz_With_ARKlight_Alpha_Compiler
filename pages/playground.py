@@ -1,52 +1,82 @@
 from __future__ import annotations
 
-from arklight import Action, Bind, Button, Container, Heading, State, Text
+from arklight import Action, Bind, Button, Container, Heading, Prop, Text, component
 
 from components.cards import card_class, card_grid
 from components.layout import page_shell
-from content.playground import COUNTER_INITIAL, PLAYGROUND_CARDS
+from content.playground import PLAYGROUND_CARDS
+
+# --------------------------------------------------------------------
+# v0.060 "User-defined, reusable components" (shipped in full as of
+# alpha v0.062 -- see docs/Foundational/USER-DEFINED-COMPONENTS.md)
+# replaces the old hand-wired approach below: previously every
+# expand/collapse card needed its own State(f"show_detail_{key}", ...)
+# declared up at page_shell's state= param, plumbed through a `key`
+# string threaded from content/playground.py just to keep each card's
+# name collision-free. component(state={...}) does that hoisting
+# itself now -- every FrameworkCard(...) call site gets its own
+# independent, instance-scoped "open" value with zero manual plumbing,
+# confirmed directly against the Stage 4 implementation (each instance
+# is namespaced onto the page under a unique key at expansion time,
+# before Validation ever runs).
+# --------------------------------------------------------------------
 
 
-def _framework_card(key: str, name: str, summary: str, detail: str, is_hero: bool):
-    """
-    One independent expand/collapse card's *visual* half. The matching
-    State(...) declaration is NOT built here -- see playground() below
-    for why every State(...) on this page is hoisted to page_shell's
-    state= param instead of living next to the markup that uses it.
-
-    Deliberately not a mutually-exclusive tab switcher (see
-    content/faq.py's "Can one on_click fire more than one Action?"
-    entry, and PLAN.md Section 9) -- on_click only ever fires a single
-    Action, so cross-card coordination ("clicking one collapses the
-    others") isn't expressible today. Each card gets its own
-    independent State instead, verified against what
-    Action.toggle_bool/Bind.when actually do, not simulated.
-    """
-    state_key = f"show_detail_{key}"
+@component(
+    props={
+        "name": Prop(),
+        "summary": Prop(),
+        "detail": Prop(),
+        "is_hero": Prop(default=False),
+    },
+    state={"open": False},
+)
+def FrameworkCard(name=None, summary=None, detail=None, is_hero=False):
     return Container(
         Heading(name, level=3),
         Text(summary, class_name="muted"),
-        Button("Toggle details", on_click=Action.toggle_bool(state_key), class_name="pill"),
+        Button("Toggle details", on_click=Action.toggle_bool("open"), class_name="pill"),
         Container(
             Text(detail),
             class_name="playground-panel",
-            bind_class=Bind.when(state_key, "playground-panel-open"),
+            bind_class=Bind.when("open", "playground-panel-open"),
         ),
         class_name=card_class(is_hero=is_hero),
     )
 
 
-def _counter_demo():
+@component(
+    props={"label": Prop(default="Live counter"), "start": Prop(default=0)},
+    state={"count": 0, "milestone": 5},
+)
+def Counter(label="Live counter", start=0):
+    """
+    Two independent `Counter()` instances appear on this page (see
+    playground() below) specifically to demonstrate what "instance-
+    scoped" component state actually means in practice: each one owns
+    its own "count"/"milestone" pair, so clicking one's buttons never
+    touches the other's readout -- verified directly against a build
+    with two instances side by side, not assumed from the docs alone.
+
+    `milestone` is declared but deliberately unused by any Show(...)
+    here -- tried first, and reverted after an actual build error:
+    `_rewrite_component_state_refs` (arklight/ir/components.py, v0.060
+    Stage 4) only retargets `Bind(...)`/`Action.*(...)`/`bind_class=`/
+    `bind_value=` references onto a component instance's namespaced
+    state key -- exactly the four kinds
+    docs/Foundational/USER-DEFINED-COMPONENTS.md's "Component-owned
+    state" section lists as working, and no more. A `Show(Predicate.gt(
+    "count", "milestone"))` inside this same render function fails the
+    real build with "references state 'count', which isn't declared on
+    this page" -- Show/Predicate against component-owned state isn't
+    (yet) one of the rewritten reference kinds, confirmed by actually
+    building it, not inferred from the docs' silence on the point. See
+    pages/bundle_size.py for `Predicate.gt` used against page-level
+    State(...) instead, where it's fully supported.
+    """
     return Container(
-        Heading("Live counter", level=2),
-        Text(
-            "A minimal example: three buttons mutate one page-scoped "
-            "State, and the number below updates live via Bind -- no "
-            "page reload, no client-side framework, ~6 KB of shipped "
-            "JS total for this whole page (see Bundle Size).",
-            class_name="muted",
-        ),
-        Heading(Bind("count"), level=3, class_name="kpi-value"),
+        Heading(label, level=3),
+        Heading(Bind("count"), level=2, class_name="kpi-value"),
         Container(
             Button("-1", on_click=Action.decrement("count"), class_name="pill"),
             Button("Reset", on_click=Action.reset("count"), class_name="pill"),
@@ -58,30 +88,33 @@ def _counter_demo():
 
 
 def playground(theme: dict[str, str]):
-    # Every State(...) on this page, collected in one place and handed
-    # to page_shell's state= param -- see components/layout.py's
-    # page_shell docstring for why this can't just be built next to
-    # the markup that references it (ARKlight requires State(...) to
-    # be a literal direct child of Page(...), confirmed directly
-    # against arklight/ir/validate.py, not something page_shell's own
-    # Main()/Container() wrapping can satisfy).
-    page_state = [State(f"show_detail_{key}", False) for key, *_ in PLAYGROUND_CARDS]
-    page_state.append(State("count", COUNTER_INITIAL))
-
-    cards = card_grid(*[_framework_card(*card) for card in PLAYGROUND_CARDS])
+    cards = card_grid(*[FrameworkCard(name=name, summary=summary, detail=detail, is_hero=is_hero)
+                         for _key, name, summary, detail, is_hero in PLAYGROUND_CARDS])
 
     return page_shell(
         Heading("Playground"),
         Text(
-            "Everything on this page is real, page-compiled State/Bind/"
-            "Action interactivity -- not a mockup. Expand a card below "
-            "(each one toggles independently), or try the counter.",
+            "Everything on this page is real, compiled State/Bind/"
+            "Action interactivity -- not a mockup. Every card and both "
+            "counters below are the SAME component (FrameworkCard/"
+            "Counter, component(state=...)) called multiple times; "
+            "each call gets its own independent state, wired up "
+            "automatically rather than hand-declared per instance.",
         ),
         Heading("Framework cards -- independent expand/collapse", level=2),
         cards,
-        _counter_demo(),
+        Heading("Counters -- independent instance-scoped state", level=2),
+        Text(
+            "Two calls to the same Counter(...) component. Watch how "
+            "incrementing one never moves the other.",
+            class_name="muted",
+        ),
+        Container(
+            Counter(label="Counter A", start=0),
+            Counter(label="Counter B", start=0),
+            class_name="grid",
+        ),
         title="Playground",
-        description="A live State/Bind/Action demo -- expandable cards and a counter, running entirely on ARKlight's closed-vocabulary JS runtime.",
+        description="A live component(state=...) demo -- expandable cards and two independent counters, running entirely on ARKlight's closed-vocabulary JS runtime.",
         theme=theme,
-        state=page_state,
     )
